@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,17 +9,51 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 // Starts a real local Worker and uses its production OAuth code, never an auth bypass.
-// It only initializes MCP and lists tools: it does not call OpenAI or image services.
+// OpenAI is replaced by a local mock server (OPENAI_BASE_URL), so no real API calls are made;
+// everything else (Durable Objects, alarms, R2, the MCP transport and uploads) is the real local runtime.
 const port = Number(process.env.SMOKE_PORT || 8787);
 const origin = `http://localhost:${port}`;
 const password = randomBytes(32).toString("base64url");
 const stateDir = await mkdtemp(join(tmpdir(), "openai-image-mcp-smoke-"));
 const processEnv = { ...process.env, WRANGLER_SEND_METRICS: "false", BROWSER: "none" };
+
+// A valid 16x16 RGBA PNG.
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR42mM4oaHxnxLMMGrAqAGjBgwXAwCpMhcfTAD1DwAAAABJRU5ErkJggg==", "base64");
+const openaiCalls = [];
+const mock = createServer(async (req, res) => {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const body = Buffer.concat(chunks);
+  const request = new Request(`http://mock${req.url}`, { method: req.method, headers: req.headers, body });
+  const fields = req.url.endsWith("/edits")
+    ? Object.fromEntries([...(await request.formData()).entries()].map(([key, value]) => [key, typeof value === "string" ? value : { name: value.name, size: value.size }]))
+    : JSON.parse(body.toString());
+  openaiCalls.push({ path: req.url, auth: req.headers.authorization, fields });
+  const delay = Number(/slow:(\d+)/.exec(fields.prompt)?.[1] ?? 0);
+  await new Promise((resolve) => setTimeout(resolve, delay * 1000));
+  res.setHeader("content-type", "application/json");
+  if (fields.prompt.includes("fail")) {
+    res.statusCode = 400;
+    return res.end(JSON.stringify({ error: { code: "moderation_blocked", message: "Mock rejection for the smoke test.", param: null } }));
+  }
+  const n = Number(fields.n ?? 1);
+  res.end(JSON.stringify({
+    created: 0, size: "16x16", quality: "low", background: "opaque", output_format: "png",
+    data: Array.from({ length: n }, () => ({ b64_json: PNG.toString("base64") })),
+    usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3, input_tokens_details: { image_tokens: 0, text_tokens: 1 } },
+  }));
+});
+await new Promise((resolve) => mock.listen(0, "127.0.0.1", resolve));
+const mockUrl = `http://127.0.0.1:${mock.address().port}/v1`;
+
 const child = spawn(process.execPath, [
   "node_modules/wrangler/bin/wrangler.js", "dev", "--local", "--ip", "127.0.0.1",
   "--infer-origin-from-routes", "false",
   "--port", String(port), "--inspector-port", "0", "--persist-to", stateDir,
   "--var", `AUTH_PASSWORD:${password}`, "--var", "OPENAI_API_KEY:unused-local-placeholder",
+  "--var", `OPENAI_BASE_URL:${mockUrl}`,
+  // The production flag set minus global_fetch_strictly_public, which would block the localhost mock.
+  "--compatibility-flags", "nodejs_compat",
 ], { env: processEnv, stdio: ["ignore", "pipe", "pipe"], detached: true });
 let logs = "";
 for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { logs += chunk.toString().replaceAll(password, "[test-password]"); });
@@ -104,8 +139,77 @@ try {
     requestInit: { headers: { Authorization: `Bearer ${token.access_token}` } },
   }));
   const result = await client.listTools();
-  assert.deepEqual(result.tools.map((tool) => tool.name).sort(), ["edit", "generate"]);
-  console.log("PASS: wrangler dev, unauthenticated rejection, password rejection, consent CSP, deny redirect, browser-bound OAuth + PKCE, MCP initialize + tools/list (edit, generate).");
+  assert.deepEqual(result.tools.map((tool) => tool.name).sort(), ["create_upload", "edit", "generate", "get_job"]);
+  assert.ok(result.tools.every((tool) => tool.outputSchema), "every tool declares an outputSchema");
+
+  // Fast job: the full result comes back directly.
+  const generated = await client.callTool({ name: "generate", arguments: { prompt: "smoke fox", size: "1536x864", quality: "xhigh", n: 2 } });
+  assert.equal(generated.isError, undefined, JSON.stringify(generated));
+  assert.equal(generated.structuredContent.status, "succeeded");
+  assert.equal(generated.structuredContent.images.length, 2);
+  const [image] = generated.structuredContent.images;
+  assert.deepEqual([image.width, image.height, image.format, image.bytes], [16, 16, "png", PNG.length]);
+  assert.deepEqual(openaiCalls.at(-1).fields, { model: "gpt-image-2.5-sunburst", prompt: "smoke fox", size: "1536x864", quality: "xhigh", n: 2 });
+  assert.equal(openaiCalls.at(-1).auth, "Bearer unused-local-placeholder");
+  const downloaded = await fetch(image.url);
+  assert.equal(downloaded.headers.get("content-type"), "image/png");
+  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), PNG);
+
+  // An 8000-character Chinese prompt (~24 KB) reaches OpenAI intact; 9000 characters, which
+  // OpenAI would silently ignore, are rejected before any request is made.
+  const sentence = "\u4e00\u53ea\u5728\u96ea\u5730\u91cc\u5954\u8dd1\u7684\u7ea2\u72d0\u72f8\uff0c";
+  const longPrompt = sentence.repeat(700).slice(0, 8000);
+  const long = await client.callTool({ name: "generate", arguments: { prompt: longPrompt } });
+  assert.equal(long.structuredContent?.status, "succeeded", JSON.stringify(long).slice(0, 500));
+  assert.equal(openaiCalls.at(-1).fields.prompt, longPrompt);
+  const callsBefore = openaiCalls.length;
+  const tooLong = await client.callTool({ name: "generate", arguments: { prompt: sentence.repeat(700).slice(0, 9000) } });
+  assert.ok(tooLong.isError && JSON.stringify(tooLong.content).includes("about 9,000 tokens"), JSON.stringify(tooLong).slice(0, 500));
+  assert.equal(openaiCalls.length, callsBefore);
+
+  // Upload a local file with the returned curl-equivalent PUT, then edit it by id.
+  const upload = await client.callTool({ name: "create_upload", arguments: {} });
+  const [slot] = upload.structuredContent.uploads;
+  assert.match(slot.curl, /^curl -sS --fail-with-body -X PUT --data-binary @/);
+  const put = await fetch(slot.upload_url, { method: "PUT", body: PNG });
+  assert.equal(put.status, 201, await put.clone().text());
+  assert.equal((await put.json()).id, slot.id);
+  assert.equal((await fetch(slot.upload_url, { method: "PUT", body: PNG })).status, 409);
+  const edited = await client.callTool({ name: "edit", arguments: { prompt: "smoke edit", images: [slot.id, image.id], n: 1, input_fidelity: "high" } });
+  assert.equal(edited.structuredContent?.status, "succeeded", JSON.stringify(edited));
+  const editCall = openaiCalls.at(-1);
+  assert.equal(editCall.path, "/v1/images/edits");
+  assert.deepEqual(editCall.fields["image[]"], { name: "image-2.png", size: PNG.length });
+  assert.equal(editCall.fields.input_fidelity, "high");
+  const local = await client.callTool({ name: "edit", arguments: { prompt: "x", images: ["/home/bot/a.png"] } });
+  assert.ok(local.isError && JSON.stringify(local.content).includes("create_upload"));
+
+  // Slow job: generate returns a job_id; get_job waits with progress notifications and returns the result.
+  const slow = await client.callTool({ name: "generate", arguments: { prompt: "smoke slow:4", wait_seconds: 1 } });
+  assert.equal(slow.structuredContent.status, "running", JSON.stringify(slow));
+  const progress = [];
+  const finished = await client.callTool({ name: "get_job", arguments: { job_id: slow.structuredContent.job_id } }, undefined, {
+    onprogress: (event) => progress.push(event), resetTimeoutOnProgress: true,
+  });
+  assert.equal(finished.structuredContent.status, "succeeded", JSON.stringify(finished));
+  assert.ok(progress.length >= 1 && progress[0].message.includes(slow.structuredContent.job_id), JSON.stringify(progress));
+
+  // A job keeps running after its client goes away.
+  const detached = await client.callTool({ name: "generate", arguments: { prompt: "smoke slow:2", wait_seconds: 0 } });
+  await client.close();
+  client = new Client({ name: "local-image-mcp-smoke-2", version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", origin), {
+    requestInit: { headers: { Authorization: `Bearer ${token.access_token}` } },
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  const later = await client.callTool({ name: "get_job", arguments: { job_id: detached.structuredContent.job_id, wait_seconds: 0 } });
+  assert.equal(later.structuredContent.status, "succeeded", JSON.stringify(later));
+
+  // Failed job: the OpenAI error text is returned.
+  const failed = await client.callTool({ name: "generate", arguments: { prompt: "smoke fail" } });
+  assert.ok(failed.isError && JSON.stringify(failed.content).includes("[moderation_blocked]: Mock rejection for the smoke test."), JSON.stringify(failed));
+
+  console.log("PASS: wrangler dev, unauthenticated rejection, password rejection, consent CSP, deny redirect, browser-bound OAuth + PKCE, MCP tools/list (4 tools with output schemas), generate, 8000-character Chinese prompt accepted and 9000 rejected, create_upload + PUT + one-time reuse rejection, edit with upload id, local-path error, async job + get_job with progress, job survives client disconnect, OpenAI error passthrough.");
 } catch (error) {
   console.error(logs);
   throw error;
@@ -117,5 +221,6 @@ try {
     child.once("exit", resolve);
     setTimeout(resolve, 5000).unref();
   });
+  mock.close();
   await rm(stateDir, { recursive: true, force: true });
 }

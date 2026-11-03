@@ -10,9 +10,15 @@
   ],
   "images": { "binding": "IMAGES" },
   "durable_objects": {
-    "bindings": [{ "name": "IMAGE_MCP", "class_name": "ImageMcp" }]
+    "bindings": [
+      { "name": "IMAGE_MCP", "class_name": "ImageMcp" },
+      { "name": "IMAGE_JOBS", "class_name": "ImageJob" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageMcp"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ImageMcp"] },
+    { "tag": "v2", "new_sqlite_classes": ["ImageJob"] }
+  ],
   "kv_namespaces": [
     { "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }
   ]

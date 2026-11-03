@@ -16,6 +16,7 @@ const stateDir = await mkdtemp(join(tmpdir(), "openai-image-mcp-smoke-"));
 const processEnv = { ...process.env, WRANGLER_SEND_METRICS: "false", BROWSER: "none" };
 const child = spawn(process.execPath, [
   "node_modules/wrangler/bin/wrangler.js", "dev", "--local", "--ip", "127.0.0.1",
+  "--infer-origin-from-routes", "false",
   "--port", String(port), "--inspector-port", "0", "--persist-to", stateDir,
   "--var", `AUTH_PASSWORD:${password}`, "--var", "OPENAI_API_KEY:unused-local-placeholder",
 ], { env: processEnv, stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -58,6 +59,7 @@ try {
   });
   const page = await fetch(authUrl);
   assert.equal(page.status, 200, await page.clone().text());
+  assert.equal(page.headers.get("Content-Security-Policy"), "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
   const html = await page.text();
   const handle = html.match(/name="handle" value="([^"]+)"/)?.[1];
   assert.ok(handle, "Missing browser-bound consent handle");
@@ -72,6 +74,23 @@ try {
   const callback = new URL(approved.headers.get("Location"));
   assert.equal(callback.searchParams.get("state"), state);
   assert.ok(callback.searchParams.get("code"), callback.href);
+
+  const denyPage = await fetch(authUrl);
+  assert.equal(denyPage.status, 200);
+  assert.equal(denyPage.headers.get("Content-Security-Policy"), page.headers.get("Content-Security-Policy"));
+  const denyHandle = (await denyPage.text()).match(/name="handle" value="([^"]+)"/)?.[1];
+  assert.ok(denyHandle, "Missing denial consent handle");
+  const denyCookie = denyPage.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
+  const denied = await fetch(`${origin}/authorize`, {
+    method: "POST", redirect: "manual", headers: { Origin: origin, Cookie: denyCookie },
+    body: new URLSearchParams({ handle: denyHandle, decision: "deny" }),
+  });
+  assert.equal(denied.status, 302);
+  const deniedCallback = new URL(denied.headers.get("Location"));
+  assert.equal(deniedCallback.origin, new URL(redirectUri).origin);
+  assert.equal(deniedCallback.searchParams.get("error"), "access_denied");
+  assert.equal(deniedCallback.searchParams.get("state"), state);
+
   const token = await json(await fetch(`${origin}/oauth/token`, {
     method: "POST", body: new URLSearchParams({
       grant_type: "authorization_code", client_id: registration.client_id,
@@ -86,7 +105,7 @@ try {
   }));
   const result = await client.listTools();
   assert.deepEqual(result.tools.map((tool) => tool.name).sort(), ["edit", "generate"]);
-  console.log("PASS: wrangler dev, unauthenticated rejection, password rejection, browser-bound OAuth + PKCE, MCP initialize + tools/list (edit, generate).");
+  console.log("PASS: wrangler dev, unauthenticated rejection, password rejection, consent CSP, deny redirect, browser-bound OAuth + PKCE, MCP initialize + tools/list (edit, generate).");
 } catch (error) {
   console.error(logs);
   throw error;

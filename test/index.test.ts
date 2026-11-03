@@ -35,8 +35,9 @@ function fixture(withImages = true) {
   const input = vi.fn(() => ({ transform, output }));
   const kvData = new Map<string, string>();
   const kv = {
-    get: vi.fn(async (key: string, type?: string) => {
+    get: vi.fn(async (key: string, options?: string | { type: string }) => {
       const value = kvData.get(key);
+      const type = typeof options === "string" ? options : options?.type;
       return value === undefined ? null : type === "json" ? JSON.parse(value) : value;
     }),
     put: vi.fn(async (key: string, value: string) => { kvData.set(key, value); }),
@@ -218,6 +219,32 @@ describe("public image endpoint", () => {
 });
 
 describe("OAuth", () => {
+  it("serves the consent page with a CSP that omits form-action", async () => {
+    const f = fixture();
+    const redirectUri = "https://client.example/callback";
+    const registration = await worker.fetch(new Request("https://images.example/oauth/register", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Consent CSP test", redirect_uris: [redirectUri],
+        grant_types: ["authorization_code"], response_types: ["code"], token_endpoint_auth_method: "none",
+      }),
+    }), f.env, ctx);
+    expect(registration.status).toBe(201);
+    const { client_id } = await registration.json() as { client_id: string };
+    const url = new URL("https://images.example/authorize");
+    url.search = new URLSearchParams({
+      client_id, redirect_uri: redirectUri, response_type: "code", scope: "images",
+      resource: "https://images.example/mcp", code_challenge: "a".repeat(43), code_challenge_method: "S256",
+    }).toString();
+    const response = await worker.fetch(new Request(url), f.env, ctx);
+    expect(response.status).toBe(200);
+    const csp = response.headers.get("Content-Security-Policy") ?? "";
+    expect(csp).not.toContain("form-action");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("base-uri 'none'");
+  });
+
   it("rejects /mcp without a bearer token using the real OAuthProvider", async () => {
     const response = await worker.fetch(new Request("https://images.example/mcp", { method: "POST" }), fixture().env, ctx);
     expect(response.status).toBe(401);

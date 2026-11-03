@@ -260,13 +260,11 @@ export async function publicHandler(request: Request, env: Env): Promise<Respons
       const consent = await oauth.beginConsent(auth);
       consent.headers.set("Content-Type", "text/html; charset=utf-8");
       consent.headers.set("Cache-Control", "no-store");
-      consent.headers.set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+      // form-action applies to the whole redirect chain after submit, and OAuth clients may redirect further, so it is omitted here.
+      consent.headers.set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
       return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize Image MCP</title>
-<h1>Allow ${escapeHtml(details.clientName)} to generate and edit images?</h1>
-<p>${details.clientDomain ? `Published by ${escapeHtml(details.clientDomain)}.` : "This client's name is self-asserted and not verified."}</p>
-<p>Access will be sent to <strong>${escapeHtml(details.redirectHost)}</strong>.</p>
-${details.redirectIsLoopback ? "<p>Warning: this grants access to an app on your computer. Continue only if you started this sign-in.</p>" : ""}
-<p>Scopes: ${details.scope.map(escapeHtml).join(", ") || "image tools"}. Image generation and editing may incur OpenAI charges.</p>
+<h1>Authorize Image MCP</h1>
+<p>Allow ${escapeHtml(details.clientName)} to generate and edit images?</p>
 <form method="post" action="/authorize"><input type="hidden" name="handle" value="${escapeHtml(consent.handle)}">
 <label>Password <input type="password" name="password" required autocomplete="current-password" maxlength="1024"></label>
 <button name="decision" value="approve">Allow</button><button name="decision" value="deny" formnovalidate>Deny</button></form></html>`, { headers: consent.headers });

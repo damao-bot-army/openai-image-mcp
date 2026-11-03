@@ -35,8 +35,9 @@ function fixture(withImages = true) {
   const input = vi.fn(() => ({ transform, output }));
   const kvData = new Map<string, string>();
   const kv = {
-    get: vi.fn(async (key: string, type?: string) => {
+    get: vi.fn(async (key: string, options?: string | { type: string }) => {
       const value = kvData.get(key);
+      const type = typeof options === "string" ? options : options?.type;
       return value === undefined ? null : type === "json" ? JSON.parse(value) : value;
     }),
     put: vi.fn(async (key: string, value: string) => { kvData.set(key, value); }),
@@ -218,6 +219,52 @@ describe("public image endpoint", () => {
 });
 
 describe("OAuth", () => {
+  it.each([
+    ["https://client.example/callback", "https://client.example"],
+    ["https://client.example:8443/callback?next=https://other.example", "https://client.example:8443"],
+    ["http://localhost:9876/callback", "http://localhost:9876"],
+    ["http://127.0.0.1:9876/callback", "http://127.0.0.1:9876"],
+  ])("allows only self and the validated redirect origin for %s", async (redirectUri, redirectOrigin) => {
+    const f = fixture();
+    const registration = await worker.fetch(new Request("https://images.example/oauth/register", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Consent CSP test", redirect_uris: [redirectUri, "https://other.example/callback"],
+        grant_types: ["authorization_code"], response_types: ["code"], token_endpoint_auth_method: "none",
+      }),
+    }), f.env, ctx);
+    expect(registration.status).toBe(201);
+    const { client_id } = await registration.json() as { client_id: string };
+    const url = new URL("https://images.example/authorize");
+    url.search = new URLSearchParams({
+      client_id, redirect_uri: redirectUri, response_type: "code", scope: "images",
+      resource: "https://images.example/mcp", code_challenge: "a".repeat(43), code_challenge_method: "S256",
+    }).toString();
+    const response = await worker.fetch(new Request(url), f.env, ctx);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Security-Policy")).toBe(
+      `default-src 'none'; form-action 'self' ${redirectOrigin}; frame-ancestors 'none'; base-uri 'none'`,
+    );
+  });
+
+  it.each([
+    "https://client.example;form-action/callback",
+    "https://*.example/callback",
+    "data:text/plain,callback",
+  ])("does not interpolate unsafe or opaque redirect origins from %s into CSP", async (redirectUri) => {
+    const f = fixture();
+    f.env.OAUTH_PROVIDER = {
+      parseAuthRequest: vi.fn(async () => ({ redirectUri })),
+      describeConsent: vi.fn(async () => ({ clientName: "Test client", redirectHost: "Test host", scope: ["images"] })),
+      beginConsent: vi.fn(async () => ({ handle: "test-handle", headers: new Headers() })),
+    } as unknown as Env["OAUTH_PROVIDER"];
+    const response = await publicHandler(new Request("https://images.example/authorize"), f.env);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Security-Policy")).toBe(
+      "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    );
+  });
+
   it("rejects /mcp without a bearer token using the real OAuthProvider", async () => {
     const response = await worker.fetch(new Request("https://images.example/mcp", { method: "POST" }), fixture().env, ctx);
     expect(response.status).toBe(401);

@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "openai-image-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": { "IMAGE_MODEL": "gpt-image-2.5-sunburst" },
+  "r2_buckets": [
+    { "binding": "IMAGES_BUCKET", "bucket_name": "openai-image-mcp" }
+  ],
+  "images": { "binding": "IMAGES" },
+  "durable_objects": {
+    "bindings": [{ "name": "IMAGE_MCP", "class_name": "ImageMcp" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageMcp"] }],
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }
+  ]
+}

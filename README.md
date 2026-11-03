@@ -21,7 +21,7 @@ npx wrangler r2 bucket create openai-image-mcp
 npx wrangler kv namespace create OAUTH_KV
 ```
 
-Replace the all-zero **placeholder** KV ID in `wrangler.jsonc` with the ID printed by the last command. Adjust the R2 bucket name if needed. Configure these Worker secrets interactively:
+The repository's `wrangler.jsonc` is configured with the author's own KV namespace ID and custom domain (`openai-image-mcp.agents.damao.io`); for your own deployment, replace the KV ID with the ID printed by the last command and the domain with your own. Adjust the R2 bucket name if needed. Configure these Worker secrets interactively:
 
 ```sh
 npx wrangler secret put OPENAI_API_KEY

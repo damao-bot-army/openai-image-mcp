@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "openai-image-mcp",
+  "routes": [{ "pattern": "openai-image-mcp.agents.damao.io", "custom_domain": true }],
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
@@ -14,6 +15,6 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageMcp"] }],
   "kv_namespaces": [
-    { "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }
+    { "binding": "OAUTH_KV", "id": "51bbaf4537ec4e0fa06acf268e48ad75" }
   ]
 }

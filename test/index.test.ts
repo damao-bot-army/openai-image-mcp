@@ -224,7 +224,8 @@ describe("OAuth", () => {
     ["https://client.example:8443/callback?next=https://other.example", "https://client.example:8443"],
     ["http://localhost:9876/callback", "http://localhost:9876"],
     ["http://127.0.0.1:9876/callback", "http://127.0.0.1:9876"],
-  ])("allows only self and the validated redirect origin for %s", async (redirectUri, redirectOrigin) => {
+    ["https://images.example/callback", null],
+  ])("allows only self, the Worker origin, and the validated redirect origin for %s", async (redirectUri, redirectOrigin) => {
     const f = fixture();
     const registration = await worker.fetch(new Request("https://images.example/oauth/register", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -243,7 +244,7 @@ describe("OAuth", () => {
     const response = await worker.fetch(new Request(url), f.env, ctx);
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Security-Policy")).toBe(
-      `default-src 'none'; form-action 'self' ${redirectOrigin}; frame-ancestors 'none'; base-uri 'none'`,
+      `default-src 'none'; form-action 'self' https://images.example${redirectOrigin ? ` ${redirectOrigin}` : ""}; frame-ancestors 'none'; base-uri 'none'`,
     );
   });
 
@@ -261,7 +262,7 @@ describe("OAuth", () => {
     const response = await publicHandler(new Request("https://images.example/authorize"), f.env);
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Security-Policy")).toBe(
-      "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; form-action 'self' https://images.example; frame-ancestors 'none'; base-uri 'none'",
     );
   });
 

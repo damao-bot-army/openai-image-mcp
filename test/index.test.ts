@@ -219,18 +219,13 @@ describe("public image endpoint", () => {
 });
 
 describe("OAuth", () => {
-  it.each([
-    ["https://client.example/callback", "https://client.example"],
-    ["https://client.example:8443/callback?next=https://other.example", "https://client.example:8443"],
-    ["http://localhost:9876/callback", "http://localhost:9876"],
-    ["http://127.0.0.1:9876/callback", "http://127.0.0.1:9876"],
-    ["https://images.example/callback", null],
-  ])("allows only self, the Worker origin, and the validated redirect origin for %s", async (redirectUri, redirectOrigin) => {
+  it("serves the consent page with a CSP that omits form-action", async () => {
     const f = fixture();
+    const redirectUri = "https://client.example/callback";
     const registration = await worker.fetch(new Request("https://images.example/oauth/register", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        client_name: "Consent CSP test", redirect_uris: [redirectUri, "https://other.example/callback"],
+        client_name: "Consent CSP test", redirect_uris: [redirectUri],
         grant_types: ["authorization_code"], response_types: ["code"], token_endpoint_auth_method: "none",
       }),
     }), f.env, ctx);
@@ -243,27 +238,11 @@ describe("OAuth", () => {
     }).toString();
     const response = await worker.fetch(new Request(url), f.env, ctx);
     expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Security-Policy")).toBe(
-      `default-src 'none'; form-action 'self' https://images.example${redirectOrigin ? ` ${redirectOrigin}` : ""}; frame-ancestors 'none'; base-uri 'none'`,
-    );
-  });
-
-  it.each([
-    "https://client.example;form-action/callback",
-    "https://*.example/callback",
-    "data:text/plain,callback",
-  ])("does not interpolate unsafe or opaque redirect origins from %s into CSP", async (redirectUri) => {
-    const f = fixture();
-    f.env.OAUTH_PROVIDER = {
-      parseAuthRequest: vi.fn(async () => ({ redirectUri })),
-      describeConsent: vi.fn(async () => ({ clientName: "Test client", redirectHost: "Test host", scope: ["images"] })),
-      beginConsent: vi.fn(async () => ({ handle: "test-handle", headers: new Headers() })),
-    } as unknown as Env["OAUTH_PROVIDER"];
-    const response = await publicHandler(new Request("https://images.example/authorize"), f.env);
-    expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Security-Policy")).toBe(
-      "default-src 'none'; form-action 'self' https://images.example; frame-ancestors 'none'; base-uri 'none'",
-    );
+    const csp = response.headers.get("Content-Security-Policy") ?? "";
+    expect(csp).not.toContain("form-action");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("base-uri 'none'");
   });
 
   it("rejects /mcp without a bearer token using the real OAuthProvider", async () => {

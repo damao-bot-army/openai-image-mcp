@@ -59,8 +59,7 @@ try {
   });
   const page = await fetch(authUrl);
   assert.equal(page.status, 200, await page.clone().text());
-  assert.equal(page.headers.get("Content-Security-Policy"),
-    `default-src 'none'; form-action 'self' ${origin} ${new URL(redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`);
+  assert.equal(page.headers.get("Content-Security-Policy"), "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
   const html = await page.text();
   const handle = html.match(/name="handle" value="([^"]+)"/)?.[1];
   assert.ok(handle, "Missing browser-bound consent handle");

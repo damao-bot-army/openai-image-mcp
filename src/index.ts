@@ -260,13 +260,8 @@ export async function publicHandler(request: Request, env: Env): Promise<Respons
       const consent = await oauth.beginConsent(auth);
       consent.headers.set("Content-Type", "text/html; charset=utf-8");
       consent.headers.set("Cache-Control", "no-store");
-      const redirectOrigin = new URL(auth.redirectUri).origin;
-      // Some client windows fail to match 'self' (e.g. opaque document origin), so list this Worker's origin explicitly.
-      // Form redirects are subject to form-action too; allow only the validated callback's exact origin.
-      const formSources = new Set(["'self'", url.origin]);
-      if (redirectOrigin !== "null" && !/[;\s*]/.test(redirectOrigin)) formSources.add(redirectOrigin);
-      const formAction = [...formSources].join(" ");
-      consent.headers.set("Content-Security-Policy", `default-src 'none'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`);
+      // form-action applies to the whole redirect chain after submit, and OAuth clients may redirect further, so it is omitted here.
+      consent.headers.set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
       return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize Image MCP</title>
 <h1>Authorize Image MCP</h1>
 <p>Allow ${escapeHtml(details.clientName)} to generate and edit images?</p>

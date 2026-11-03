@@ -21,11 +21,17 @@ npx wrangler r2 bucket create openai-image-mcp
 npx wrangler kv namespace create OAUTH_KV
 ```
 
-Replace the all-zero **placeholder** KV ID in `wrangler.jsonc` with the ID printed by the last command. Adjust the R2 bucket name if needed. Configure these Worker secrets interactively:
+The committed `wrangler.jsonc` contains only an all-zero **placeholder** KV ID. For your deployment, copy it to `wrangler.local.jsonc`, which is git-ignored:
 
 ```sh
-npx wrangler secret put OPENAI_API_KEY
-npx wrangler secret put AUTH_PASSWORD
+cp wrangler.jsonc wrangler.local.jsonc
+```
+
+In `wrangler.local.jsonc`, replace the placeholder KV ID with the ID printed by the last command. Adjust the R2 bucket name if needed. To serve the Worker on a custom domain, add a `routes` entry such as `"routes": [{ "pattern": "mcp.example.com", "custom_domain": true }]`. Configure these Worker secrets interactively:
+
+```sh
+npx wrangler secret put OPENAI_API_KEY -c wrangler.local.jsonc
+npx wrangler secret put AUTH_PASSWORD -c wrangler.local.jsonc
 ```
 
 Use a restricted OpenAI project key with only the necessary image-model/API permissions and a long, randomly generated authorization password. Keep both private; never put real values in `wrangler.jsonc` or committed files.
@@ -33,9 +39,11 @@ Use a restricted OpenAI project key with only the necessary image-model/API perm
 ```sh
 npm run typecheck
 npm test
-npx wrangler deploy --dry-run --outdir dist
-npm run deploy
+npx wrangler deploy --dry-run -c wrangler.local.jsonc --outdir dist
+npx wrangler deploy -c wrangler.local.jsonc
 ```
+
+`npm run deploy` runs the same deploy command with `wrangler.local.jsonc`.
 
 In **claude.ai → Settings → Connectors → Add custom connector**, paste:
 

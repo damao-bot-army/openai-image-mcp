@@ -94,8 +94,16 @@ try {
   });
   const page = await fetch(authUrl);
   assert.equal(page.status, 200, await page.clone().text());
-  assert.equal(page.headers.get("Content-Security-Policy"), "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
   const html = await page.text();
+  // The base policy plus a per-response nonce for the inline style and script; never form-action or 'unsafe-inline'.
+  const consentCsp = (response, body) => {
+    const csp = response.headers.get("Content-Security-Policy");
+    const nonce = /'nonce-([^']+)'/.exec(csp)?.[1];
+    assert.equal(csp, `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'`);
+    assert.ok(body.includes(`<style nonce="${nonce}">`) && body.includes(`<script nonce="${nonce}">`), "inline style and script must carry the CSP nonce");
+    return nonce;
+  };
+  const pageNonce = consentCsp(page, html);
   const handle = html.match(/name="handle" value="([^"]+)"/)?.[1];
   assert.ok(handle, "Missing browser-bound consent handle");
   const cookie = page.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
@@ -104,6 +112,19 @@ try {
     body: new URLSearchParams({ handle, password: candidate, decision: "approve" }),
   });
   assert.equal((await authorize("wrong-password")).status, 403);
+  // A wrong password posted from the consent page links back to it; reopening it starts a fresh consent.
+  const wrong = await fetch(`${origin}/authorize`, {
+    method: "POST", redirect: "manual", headers: { Origin: origin, Cookie: cookie, Referer: authUrl.href },
+    body: new URLSearchParams({ handle, password: "wrong-password", decision: "approve" }),
+  });
+  assert.equal(wrong.status, 403);
+  assert.match(wrong.headers.get("Content-Type"), /^text\/html/);
+  const retryHref = (await wrong.text()).match(/href="(\/authorize\?[^"]+)">Try again</)?.[1]?.replaceAll("&#38;", "&");
+  assert.equal(retryHref, `/authorize${authUrl.search}`);
+  const retry = await fetch(`${origin}${retryHref}`);
+  assert.equal(retry.status, 200);
+  const retryHandle = (await retry.text()).match(/name="handle" value="([^"]+)"/)?.[1];
+  assert.ok(retryHandle && retryHandle !== handle, "Retry must start a fresh consent transaction");
   const approved = await authorize(password);
   assert.equal(approved.status, 302, await approved.clone().text());
   const callback = new URL(approved.headers.get("Location"));
@@ -112,8 +133,9 @@ try {
 
   const denyPage = await fetch(authUrl);
   assert.equal(denyPage.status, 200);
-  assert.equal(denyPage.headers.get("Content-Security-Policy"), page.headers.get("Content-Security-Policy"));
-  const denyHandle = (await denyPage.text()).match(/name="handle" value="([^"]+)"/)?.[1];
+  const denyHtml = await denyPage.text();
+  assert.notEqual(consentCsp(denyPage, denyHtml), pageNonce, "each response gets a fresh nonce");
+  const denyHandle = denyHtml.match(/name="handle" value="([^"]+)"/)?.[1];
   assert.ok(denyHandle, "Missing denial consent handle");
   const denyCookie = denyPage.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
   const denied = await fetch(`${origin}/authorize`, {
@@ -209,7 +231,7 @@ try {
   const failed = await client.callTool({ name: "generate", arguments: { prompt: "smoke fail" } });
   assert.ok(failed.isError && JSON.stringify(failed.content).includes("[moderation_blocked]: Mock rejection for the smoke test."), JSON.stringify(failed));
 
-  console.log("PASS: wrangler dev, unauthenticated rejection, password rejection, consent CSP, deny redirect, browser-bound OAuth + PKCE, MCP tools/list (4 tools with output schemas), generate, 8000-character Chinese prompt accepted and 9000 rejected, create_upload + PUT + one-time reuse rejection, edit with upload id, local-path error, async job + get_job with progress, job survives client disconnect, OpenAI error passthrough.");
+  console.log("PASS: wrangler dev, unauthenticated rejection, password rejection and retry, consent CSP nonce, deny redirect, browser-bound OAuth + PKCE, MCP tools/list (4 tools with output schemas), generate, 8000-character Chinese prompt accepted and 9000 rejected, create_upload + PUT + one-time reuse rejection, edit with upload id, local-path error, async job + get_job with progress, job survives client disconnect, OpenAI error passthrough.");
 } catch (error) {
   console.error(logs);
   throw error;

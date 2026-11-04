@@ -220,7 +220,7 @@ In Grok Bot or another MCP client that supports remote servers over Streamable H
 https://<your-worker-host>/mcp
 ```
 
-No client ID or secret needs to be configured: the server supports OAuth dynamic client registration and Client ID Metadata Documents. When the client starts the OAuth flow, a consent page opens in the browser. Check the client name and redirect destination, enter `AUTH_PASSWORD`, and click **Allow**. The client then lists the four tools above.
+No client ID or secret needs to be configured: the server supports OAuth dynamic client registration and Client ID Metadata Documents. When the client starts the OAuth flow, a consent page opens in the browser. Check the client name, enter `AUTH_PASSWORD`, and click **Allow**; if you mistype the password, **Try again** reopens the same request. The client then lists the four tools above.
 
 For local testing with MCP Inspector, see [Local development and MCP Inspector](#local-development-and-mcp-inspector).
 
@@ -320,7 +320,7 @@ For an automated local check without real secrets or OpenAI calls:
 npm run smoke
 ```
 
-This starts `wrangler dev --local` with an ephemeral password, isolated temporary storage and a local mock of the OpenAI Images API (`OPENAI_BASE_URL`; the smoke run drops `global_fetch_strictly_public` so the Worker can reach the mock on localhost). It covers OAuth (dynamic registration, wrong password, deny, consent + PKCE, token), `tools/list`, `generate` (an 8,000-character Chinese prompt is accepted, 9,000 is rejected), `create_upload` + `PUT` + reuse rejection, `edit` with an uploaded ID, the local-path error, a slow job via `get_job` with progress notifications, a job that finishes after its client disconnected, and OpenAI error passthrough — all through the real MCP transport, Durable Objects, alarms and local R2. Port 8787 must be free (`SMOKE_PORT=8790 npm run smoke` selects another).
+This starts `wrangler dev --local` with an ephemeral password, isolated temporary storage and a local mock of the OpenAI Images API (`OPENAI_BASE_URL`; the smoke run drops `global_fetch_strictly_public` so the Worker can reach the mock on localhost). It covers OAuth (dynamic registration, wrong password and retry, deny, consent + PKCE, token), `tools/list`, `generate` (an 8,000-character Chinese prompt is accepted, 9,000 is rejected), `create_upload` + `PUT` + reuse rejection, `edit` with an uploaded ID, the local-path error, a slow job via `get_job` with progress notifications, a job that finishes after its client disconnected, and OpenAI error passthrough — all through the real MCP transport, Durable Objects, alarms and local R2. Port 8787 must be free (`SMOKE_PORT=8790 npm run smoke` selects another).
 
 ### Verification
 
